@@ -1,0 +1,19 @@
+{
+  "name": "pdf-downloader",
+  "version": "1.0.0",
+  "description": "A Puppeteer script to download all PDF files from a webpage.",
+  "main": "downloadPdfs.js",
+  "scripts": {
+    "start": "node downloadPdfs.js"
+  },
+  "keywords": [
+    "puppeteer",
+    "pdf",
+    "download"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^24.6.1"
+  }
+}
