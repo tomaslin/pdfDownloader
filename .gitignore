@@ -150,9 +150,15 @@ Temporary Items
 .apdisk
 
 # Windows specific files
+
+# Configuration files (sensitive)
+config.json
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 
 # Downloaded PDFs directory
 downloads/
+
+# Generated translation output
+translations/
