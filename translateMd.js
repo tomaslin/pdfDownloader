@@ -1,7 +1,5 @@
 const fs = require('fs').promises;
 const path = require('path');
-const pdf = require('pdf-parse'); // Import pdf-parse
-// Placeholder for HTTP client (e.g., axios)
 const axios = require('axios'); // Import axios
 
 // --- Configuration Loading ---
@@ -29,20 +27,6 @@ async function loadTranslationFormats() {
     }
 }
 
-// --- PDF Processing ---
-async function readPdfText(filePath) {
-    console.log(`  Reading text from ${path.basename(filePath)}...`);
-    try {
-        const dataBuffer = await fs.readFile(filePath);
-        const data = await pdf(dataBuffer);
-        console.log(`    Successfully extracted text.`);
-        return data.text;
-    } catch (error) {
-        console.error(`    Error reading PDF file ${path.basename(filePath)}:`, error.message);
-        throw error; // Re-throw the error to be caught in the main loop
-    }
-}
-
 // --- Translation API Call ---
 async function translateText(text, targetLang, instructions, config) {
     console.log(`  Requesting translation to ${targetLang}...`);
@@ -50,7 +34,13 @@ async function translateText(text, targetLang, instructions, config) {
         // Construct the prompt for the OpenAI API
         const prompt = `Translate the following text to ${targetLang}. 
 Instructions: ${instructions}. 
-Formatting: Return the translation ONLY as Markdown.
+Formatting Requirements: 
+- Return ONLY the translated text.
+- Format the output as clean, well-structured Markdown.
+- Use appropriate Markdown for headings and sections based on the source text structure.
+- Remove any unnecessary extra whitespace (leading/trailing spaces, multiple blank lines).
+- Remove any prefix that says markdown or otherwise, simply remove markdown content 
+- Return the full entirely translated document, don't summarize, don't have sections tha say existing code. 
 
 Text to translate:
 ---
@@ -78,7 +68,6 @@ ${text}
         );
 
         // Extract the translated text from the response
-        // This might need adjustment based on the actual API response structure
         const translatedMarkdown = response.data.choices[0]?.message?.content.trim();
 
         if (!translatedMarkdown) {
@@ -91,31 +80,24 @@ ${text}
     } catch (error) {
         let errorMessage = error.message;
         if (error.response) {
-            // Include more details if it's an API error
             errorMessage = `API Error: ${error.response.status} ${error.response.statusText}. ${JSON.stringify(error.response.data)}`;
         }
         console.error(`    Error during translation API call to ${targetLang}:`, errorMessage);
-        throw new Error(`Translation failed for ${targetLang}: ${errorMessage}`); // Re-throw to be caught in the main loop
+        throw new Error(`Translation failed for ${targetLang}: ${errorMessage}`);
     }
 }
 
 // --- Main Execution Logic ---
 async function main() {
-    const inputDir = process.argv[2];
-    if (!inputDir) {
-        console.error('Please provide the input directory path as a command line argument.');
-        console.error('Usage: node translatePdf.js <input_directory>');
-        process.exit(1);
-    }
-
-    const absoluteInputDir = path.resolve(inputDir);
-    const outputBaseDir = path.join(__dirname, 'translations');
+    const sourceDir = path.join(__dirname, 'extracted_md');
+    const outputBaseDir = path.join(sourceDir, 'translated'); // Changed to be inside sourceDir
 
     try {
-        await fs.access(absoluteInputDir);
-        console.log(`Input directory found: ${absoluteInputDir}`);
+        await fs.access(sourceDir);
+        console.log(`Source directory found: ${sourceDir}`);
     } catch (error) {
-        console.error(`Error accessing input directory: ${absoluteInputDir}`, error.message);
+        console.error(`Error accessing source directory: ${sourceDir}`, error.message);
+        console.error('Please ensure the extracted_md directory exists and contains Markdown files.');
         process.exit(1);
     }
 
@@ -126,45 +108,67 @@ async function main() {
     const translationFormats = await loadTranslationFormats();
 
     try {
-        const files = await fs.readdir(absoluteInputDir);
-        const pdfFiles = files.filter(file => path.extname(file).toLowerCase() === '.pdf');
+        const files = await fs.readdir(sourceDir);
+        const mdFiles = files.filter(file => path.extname(file).toLowerCase() === '.md');
 
-        if (pdfFiles.length === 0) {
-            console.log(`No PDF files found in ${absoluteInputDir}.`);
+        if (mdFiles.length === 0) {
+            console.log(`No Markdown files found in ${sourceDir}. No files to translate.`);
             return;
         }
 
-        console.log(`Found ${pdfFiles.length} PDF file(s). Starting translation process...`);
+        console.log(`Found ${mdFiles.length} Markdown files. Starting translation process...`);
 
-        for (const pdfFile of pdfFiles) {
-            const pdfFilePath = path.join(absoluteInputDir, pdfFile);
-            const baseName = path.basename(pdfFile, '.pdf');
-            const pdfOutputDir = path.join(outputBaseDir, baseName);
-            await fs.mkdir(pdfOutputDir, { recursive: true });
+        for (const mdFile of mdFiles) {
+            const sourceMdPath = path.join(sourceDir, mdFile);
+            const baseName = path.basename(mdFile);
 
-            console.log(`\nProcessing: ${pdfFile}`);
-            let pdfText;
+            console.log(`\nProcessing file: ${baseName}`);
+
+            let sourceText;
             try {
-                pdfText = await readPdfText(pdfFilePath);
+                sourceText = await fs.readFile(sourceMdPath, 'utf8');
+                console.log(`  Read source file: ${baseName}`);
             } catch (readError) {
-                console.error(`  Skipping ${pdfFile} due to read error.`);
-                continue; // Skip to the next file if reading fails
+                console.error(`  Skipping file ${baseName}: Cannot read file.`, readError.message);
+                continue; // Skip to the next file
             }
 
             for (const [langCode, instructions] of Object.entries(translationFormats)) {
+                const langOutputDir = path.join(outputBaseDir, langCode);
+                await fs.mkdir(langOutputDir, { recursive: true }); // Ensure language directory exists
+                const outputMdPath = path.join(langOutputDir, baseName); // Keep original filename
+
+                if (langCode.toLowerCase() === 'en') {
+                    try {
+                        await fs.copyFile(sourceMdPath, outputMdPath);
+                        console.log(`  Copied source file to ${outputMdPath}`);
+                    } catch (copyError) {
+                        console.error(`  Failed to copy ${baseName} to ${langCode} directory:`, copyError.message);
+                    }
+                    continue; // Move to next language
+                }
+
                 if (instructions.toLowerCase() === "don't translate") {
-                    console.log(`Skipping translation for ${langCode} as per instructions.`);
+                    console.log(`  Skipping translation for ${langCode} as per instructions.`);
                     continue;
                 }
 
-                console.log(`  Translating to ${langCode}...`);
+                // Check if translated file already exists
                 try {
-                    const translatedText = await translateText(pdfText, langCode, instructions, config);
-                    const outputMdPath = path.join(pdfOutputDir, `${langCode}.md`);
+                    await fs.access(outputMdPath);
+                    console.log(`  Skipping translation for ${langCode}: File already exists at ${outputMdPath}`);
+                    continue; // Skip to the next language if file exists
+                } catch (err) {
+                    // File doesn't exist, proceed with translation
+                }
+
+                console.log(`  Translating ${baseName} to ${langCode}...`);
+                try {
+                    const translatedText = await translateText(sourceText, langCode, instructions, config);
                     await fs.writeFile(outputMdPath, translatedText);
                     console.log(`    Successfully translated and saved to ${outputMdPath}`);
                 } catch (translateError) {
-                    console.error(`    Failed to translate ${pdfFile} to ${langCode}:`, translateError.message);
+                    console.error(`    Failed to translate ${baseName} to ${langCode}:`, translateError.message);
                 }
             }
         }
